@@ -1,0 +1,22 @@
+# Nim
+nimcache/
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+
+# Rust
+target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
