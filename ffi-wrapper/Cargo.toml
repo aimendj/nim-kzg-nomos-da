@@ -5,11 +5,12 @@ edition = "2021"
 
 [lib]
 name = "nomos_da_ffi"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs" 
 
 [dependencies]
 kzgrs-backend = { path = "../logos-blockchain/nomos-da/kzgrs-backend", default-features = false }
 kzgrs = { path = "../logos-blockchain/nomos-da/kzgrs", default-features = false }
 
-[features]
-default = []
+[build-dependencies]
+cbindgen = "0.26"
