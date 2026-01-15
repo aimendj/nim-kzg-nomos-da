@@ -1,4 +1,4 @@
-.PHONY: help setup build clean test
+.PHONY: help setup build clean test test-rust
 
 help:
 	@echo "Available targets:"
@@ -6,7 +6,8 @@ help:
 	@echo "  build-rust       - Build the Rust nomos-da library"
 	@echo "  build            - Build the Nim wrapper"
 	@echo "  clean            - Clean build artifacts"
-	@echo "  test             - Run tests"
+	@echo "  test-rust        - Run Rust tests"
+	@echo "  test             - Run Nim tests"
 
 setup:
 	@if [ -d "logos-blockchain" ]; then \
@@ -40,8 +41,15 @@ clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf nimcache
 	rm -rf ffi-wrapper/target
-	rm -f src/nomos_da
+
+test-rust:
+	@echo "Running Rust tests..."
+	@if [ ! -d "ffi-wrapper" ]; then \
+		echo "Error: ffi-wrapper directory not found."; \
+		exit 1; \
+	fi
+	cd ffi-wrapper && cargo test
 
 test:
-	@echo "Running tests..."
+	@echo "Running Nim tests..."
 	nimble test
