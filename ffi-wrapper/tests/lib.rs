@@ -1,5 +1,6 @@
 //! Integration tests for nomos-da FFI wrapper
 
+use kzgrs_backend::encoder::DaEncoderParams;
 use nomos_da_ffi::{
     nomos_da_cleanup, nomos_da_encoder_encode, nomos_da_encoder_free,
     nomos_da_encoder_new, nomos_da_encoded_data_free,
@@ -9,7 +10,7 @@ use nomos_da_ffi::{
 };
 use std::ptr;
 
-const CHUNK_SIZE: usize = 31;
+const CHUNK_SIZE: usize = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
 
 fn create_test_data(size: usize) -> Vec<u8> {
     (1..=size).map(|i| (i % 256) as u8).collect()
@@ -205,12 +206,12 @@ fn test_encode_size_0() {
 }
 
 #[test]
-fn test_encode_size_less_than_31() {
+fn test_encode_size_less_than_chunk() {
     unsafe { test_encode_success(15, 4); }
 }
 
 #[test]
-fn test_encode_size_more_than_31_not_multiple() {
+fn test_encode_size_more_than_chunk_not_multiple() {
     unsafe {
         test_encode_success(32, 4);
         test_encode_success(50, 4);
@@ -219,35 +220,35 @@ fn test_encode_size_more_than_31_not_multiple() {
 }
 
 #[test]
-fn test_encode_size_31() {
-    unsafe { test_encode_success(31, 4); }
+fn test_encode_size_one_chunk() {
+    unsafe { test_encode_success(CHUNK_SIZE, 4); }
 }
 
 #[test]
-fn test_encode_size_2_times_31() {
-    unsafe { test_encode_success(2 * 31, 4); }
+fn test_encode_size_2_chunks() {
+    unsafe { test_encode_success(2 * CHUNK_SIZE, 4); }
 }
 
 #[test]
-fn test_encode_size_10_times_31() {
-    unsafe { test_encode_success(10 * 31, 4); }
+fn test_encode_size_10_chunks() {
+    unsafe { test_encode_success(10 * CHUNK_SIZE, 4); }
 }
 
 #[test]
 fn test_encode_column_count_2() {
     unsafe {
-        test_encode_success(31, 2);
-        test_encode_success(62, 2);
-        test_encode_success(124, 2);
+        test_encode_success(CHUNK_SIZE, 2);
+        test_encode_success(2 * CHUNK_SIZE, 2);
+        test_encode_success(4 * CHUNK_SIZE, 2);
     }
 }
 
 #[test]
 fn test_encode_column_count_8() {
     unsafe {
-        test_encode_success(31, 8);
-        test_encode_success(124, 8);
-        test_encode_success(248, 8);
+        test_encode_success(CHUNK_SIZE, 8);
+        test_encode_success(4 * CHUNK_SIZE, 8);
+        test_encode_success(8 * CHUNK_SIZE, 8);
     }
 }
 
@@ -257,16 +258,16 @@ fn test_pad_size_0() {
 }
 
 #[test]
-fn test_pad_size_less_than_31() {
+fn test_pad_size_less_than_chunk() {
     unsafe { test_padding(15); }
 }
 
 #[test]
-fn test_pad_size_31() {
-    unsafe { test_padding(31); }
+fn test_pad_size_one_chunk() {
+    unsafe { test_padding(CHUNK_SIZE); }
 }
 
 #[test]
-fn test_pad_size_between_31_and_62() {
+fn test_pad_size_between_chunk_and_2_chunks() {
     unsafe { test_padding(45); }
 }
