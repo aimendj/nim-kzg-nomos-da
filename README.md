@@ -19,24 +19,6 @@ make test-rust  # Rust tests
 make test       # Nim tests
 ```
 
-## Project Layout
-
-```
-nim-kzg-nomos-da/
-├── logos-blockchain/     # Git submodule (nomos-da source)
-├── ffi-wrapper/          # Rust FFI crate
-│   ├── src/lib.rs        # FFI bindings
-│   ├── tests/lib.rs      # Rust tests
-│   └── Cargo.toml
-├── src/                  # Nim wrapper code
-│   ├── nomos_da.nim      # Main module
-│   └── nomos_da/
-│       └── types.nim     # Type definitions
-├── API.md                # API documentation
-├── Makefile              # Build automation
-└── nim.cfg               # Nim compiler config
-```
-
 ## Building
 
 ### Using Makefile (Recommended)
