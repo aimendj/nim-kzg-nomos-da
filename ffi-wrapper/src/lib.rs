@@ -64,7 +64,7 @@ pub struct VerifierHandle {
 /// Opaque handle for encoded data
 #[repr(C)]
 pub struct EncodedDataHandle {
-    data: EncodedData,
+    pub data: EncodedData,
 }
 
 #[no_mangle]
@@ -111,6 +111,15 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
     out_handle: *mut *mut EncodedDataHandle,
 ) -> NomosDaResult {
     if encoder.is_null() || data.is_null() || out_handle.is_null() {
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    if data_len == 0 || data_len % DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE != 0 {
+        set_error(format!(
+            "Data length must be a multiple of {} bytes, got {}",
+            DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE,
+            data_len
+        ));
         return NomosDaResult::ErrorInvalidInput;
     }
 
