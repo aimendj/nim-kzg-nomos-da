@@ -8,50 +8,65 @@ Supports encoding. Verification and reconstruction are work in progress.
 # Get the submodule
 make setup
 
-# Build the Rust FFI lib
+# Build the Rust FFI library (static)
 make build-rust
 
 # Build the Nim wrapper
-nimble build
+make build
+
+# Run tests
+make test-rust  # Rust tests
+make test       # Nim tests
 ```
 
-## Project layout
+## Project Layout
 
 ```
 nim-kzg-nomos-da/
-├── logos-blockchain/     # submodule
+├── logos-blockchain/     # Git submodule (nomos-da source)
 ├── ffi-wrapper/          # Rust FFI crate
-├── src/                  # Nim code
-├── API.md                # API docs
-└── Makefile
+│   ├── src/lib.rs        # FFI bindings
+│   ├── tests/lib.rs      # Rust tests
+│   └── Cargo.toml
+├── src/                  # Nim wrapper code
+│   ├── nomos_da.nim      # Main module
+│   └── nomos_da/
+│       └── types.nim     # Type definitions
+├── API.md                # API documentation
+├── Makefile              # Build automation
+└── nim.cfg               # Nim compiler config
 ```
 
 ## Building
 
-Just use the Makefile:
+### Using Makefile (Recommended)
 
 ```bash
-make setup      # init submodule
-make build-rust # build Rust lib
-make build      # build everything
-make clean      # clean up
+make setup      # Initialize/update submodule
+make build-rust # Build Rust static library
+make build      # Build everything (Rust + Nim)
+make test-rust  # Run Rust tests
+make test       # Run Nim tests
+make clean      # Clean build artifacts
 ```
 
-Or build manually:
+The Rust build outputs `libnomos_da_ffi.a` (static library) in `ffi-wrapper/target/release/`.
 
-```bash
-cd ffi-wrapper && cargo build --release
-nimble build
-```
+## Linking
 
-The Rust build outputs `libnomos_da_ffi.so` (or `.dylib`/`.dll`) in `ffi-wrapper/target/release/`.
-
-## Usage
+The library is statically linked. The `nim.cfg` file automatically configures the linker:
 
 ```nim
-import nomos_da
+passl:"-L$projectPath/ffi-wrapper/target/release"
+passl:"-lnomos_da_ffi"
+```
 
-let result = nomos_da_init()
-if result == Success:
-  nomos_da_cleanup()
+## Testing
+
+```bash
+# Run Rust FFI tests
+make test-rust
+
+# Run Nim wrapper tests
+make test
 ```
