@@ -114,16 +114,22 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
         return NomosDaResult::ErrorInvalidInput;
     }
 
-    if data_len == 0 || data_len % DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE != 0 {
-        set_error(format!(
-            "Data length must be a multiple of {} bytes, got {}",
-            DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE,
-            data_len
-        ));
-        return NomosDaResult::ErrorInvalidInput;
+    let mut padded_data_ptr: *mut u8 = ptr::null_mut();
+    let mut padded_len: CSizeT = 0;
+
+    let pad_result = nomos_da_pad_to_chunk_size(
+        data,
+        data_len,
+        &mut padded_data_ptr,
+        &mut padded_len,
+    );
+
+    if pad_result != NomosDaResult::Success {
+        return pad_result;
     }
 
-    match (*encoder).encoder.encode(std::slice::from_raw_parts(data, data_len)) {
+    let padded_slice = std::slice::from_raw_parts(padded_data_ptr, padded_len);
+    let result = match (*encoder).encoder.encode(padded_slice) {
         Ok(encoded) => {
             *out_handle = Box::into_raw(Box::new(EncodedDataHandle { data: encoded }));
             NomosDaResult::Success
@@ -132,7 +138,10 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
             set_error(format!("Encoding error: {:?}", e));
             NomosDaResult::ErrorInternal
         }
-    }
+    };
+
+    nomos_da_free_padded_data(padded_data_ptr, padded_len);
+    result
 }
 
 #[no_mangle]
@@ -182,4 +191,61 @@ pub unsafe extern "C" fn nomos_da_verifier_free(handle: *mut VerifierHandle) {
 #[no_mangle]
 pub extern "C" fn nomos_da_max_chunk_size() -> CSizeT {
     DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_pad_to_chunk_size(
+    data: *const u8,
+    data_len: CSizeT,
+    out_data: *mut *mut u8,
+    out_len: *mut CSizeT,
+) -> NomosDaResult {
+    if out_data.is_null() || out_len.is_null() {
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    if data_len == 0 {
+        set_error(format!(
+            "Data length must be greater than 0, got {}",
+            data_len
+        ));
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    if data.is_null() {
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
+    let padding_needed = if data_len % chunk_size == 0 {
+        0
+    } else {
+        chunk_size - (data_len % chunk_size)
+    };
+    let padded_len = data_len + padding_needed;
+
+    let mut padded = vec![0u8; padded_len];
+    if data_len > 0 {
+        ptr::copy_nonoverlapping(
+            data,
+            padded.as_mut_ptr(),
+            data_len,
+        );
+    }
+
+    let boxed = padded.into_boxed_slice();
+    let ptr = Box::into_raw(boxed) as *mut u8;
+    
+    *out_data = ptr;
+    *out_len = padded_len;
+
+    NomosDaResult::Success
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_free_padded_data(data: *mut u8, len: CSizeT) {
+    if !data.is_null() && len > 0 {
+        let slice_ptr: *mut [u8] = ptr::slice_from_raw_parts_mut(data, len);
+        let _ = Box::from_raw(slice_ptr);
+    }
 }
