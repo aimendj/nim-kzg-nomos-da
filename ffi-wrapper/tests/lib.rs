@@ -7,10 +7,14 @@ use nomos_da_ffi::{
     nomos_da_encoded_data_get_data, nomos_da_encoded_data_get_share,
     nomos_da_encoded_data_get_share_count, nomos_da_free_padded_data,
     nomos_da_init, nomos_da_pad_to_chunk_size, nomos_da_share_free,
-    nomos_da_verifier_free, nomos_da_verifier_new, EncodedDataHandle,
-    NomosDaResult, ShareHandle,
+    nomos_da_verifier_free, nomos_da_verifier_new, nomos_da_verifier_verify,
+    EncodedDataHandle, NomosDaResult, ShareHandle,
 };
 use std::ptr;
+
+// ============================================================================
+// Constants and Helper Functions
+// ============================================================================
 
 const CHUNK_SIZE: usize = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
 
@@ -178,6 +182,10 @@ unsafe fn test_padding_failure(data_size: usize) {
     assert!(out_data.is_null(), "Output data pointer should be null on failure (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
 }
 
+// ============================================================================
+// Utility Tests
+// ============================================================================
+
 #[test]
 fn test_init_cleanup() {
     assert_eq!(nomos_da_init() as i32, NomosDaResult::Success as i32);
@@ -201,6 +209,10 @@ fn test_verifier_create_and_free() {
         nomos_da_verifier_free(verifier);
     }
 }
+
+// ============================================================================
+// Encoding Tests
+// ============================================================================
 
 #[test]
 fn test_encode_size_0() {
@@ -236,6 +248,10 @@ fn test_encode_various_sizes_and_column_counts() {
     }
 }
 
+// ============================================================================
+// Padding Tests
+// ============================================================================
+
 #[test]
 fn test_pad_size_0() {
     unsafe { test_padding_failure(0); }
@@ -256,6 +272,10 @@ fn test_pad_various_sizes() {
         }
     }
 }
+
+// ============================================================================
+// Share Extraction Tests
+// ============================================================================
 
 #[test]
 fn test_get_share_count() {
@@ -382,5 +402,350 @@ fn test_get_share_different_column_counts() {
             nomos_da_encoded_data_free(out_handle);
             nomos_da_encoder_free(encoder);
         }
+    }
+}
+
+// ============================================================================
+// Share Verification Tests
+// ============================================================================
+
+#[test]
+fn test_verifier_verify_valid_shares() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+        assert!(!out_handle.is_null(), "Output handle should not be null (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let verifier = nomos_da_verifier_new();
+        assert!(!verifier.is_null(), "Verifier should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+        
+        for i in 0..share_count {
+            let mut share_handle: *mut ShareHandle = ptr::null_mut();
+            let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+            assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+            assert!(!share_handle.is_null(), "Share handle should not be null (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+
+            let verify_result = nomos_da_verifier_verify(verifier, share_handle, column_count);
+            assert!(verify_result, "Share verification should succeed (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+
+            nomos_da_share_free(share_handle);
+        }
+
+        nomos_da_verifier_free(verifier);
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_verifier_verify_different_column_counts() {
+    unsafe {
+        for column_count in [2, 4, 8] {
+            let encoder = nomos_da_encoder_new(column_count);
+            assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+            let data = create_test_data(CHUNK_SIZE);
+            let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+            let result = nomos_da_encoder_encode(
+                encoder,
+                data.as_ptr(),
+                data.len(),
+                &mut out_handle,
+            );
+            assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+            let verifier = nomos_da_verifier_new();
+            assert!(!verifier.is_null(), "Verifier should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+            let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+            
+            for i in 0..share_count {
+                let mut share_handle: *mut ShareHandle = ptr::null_mut();
+                let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+                assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+                
+            let verify_result = nomos_da_verifier_verify(verifier, share_handle, column_count);
+            assert!(verify_result, "Share verification should succeed (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+                
+                nomos_da_share_free(share_handle);
+            }
+
+            nomos_da_verifier_free(verifier);
+            nomos_da_encoded_data_free(out_handle);
+            nomos_da_encoder_free(encoder);
+        }
+    }
+}
+
+#[test]
+fn test_verifier_verify_null_handles() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success);
+
+        let verifier = nomos_da_verifier_new();
+        let mut share_handle: *mut ShareHandle = ptr::null_mut();
+        let result = nomos_da_encoded_data_get_share(out_handle, 0, &mut share_handle);
+        assert_eq!(result, NomosDaResult::Success);
+        assert!(!share_handle.is_null());
+
+        let verify_result_null_verifier = nomos_da_verifier_verify(ptr::null_mut(), share_handle, column_count);
+        assert!(!verify_result_null_verifier, "Verification should fail with null verifier (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let verify_result_null_share = nomos_da_verifier_verify(verifier, ptr::null_mut(), column_count);
+        assert!(!verify_result_null_share, "Verification should fail with null share (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let verify_result_invalid_domain = nomos_da_verifier_verify(verifier, share_handle, 0);
+        assert!(!verify_result_invalid_domain, "Verification should fail with invalid domain size (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        nomos_da_share_free(share_handle);
+        nomos_da_verifier_free(verifier);
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
+
+// Encoding Error Cases
+#[test]
+fn test_encode_null_encoder_handle() {
+    unsafe {
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            ptr::null_mut(),
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null encoder handle");
+        assert!(out_handle.is_null(), "Output handle should be null on failure");
+    }
+}
+
+#[test]
+fn test_encode_null_data_pointer() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        assert!(!encoder.is_null());
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            ptr::null(),
+            10,
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null data pointer");
+        assert!(out_handle.is_null(), "Output handle should be null on failure");
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_encode_null_output_handle() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        assert!(!encoder.is_null());
+        let data = create_test_data(CHUNK_SIZE);
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            ptr::null_mut(),
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null output handle");
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+// EncodedData Get Data Error Cases
+#[test]
+fn test_get_data_null_handle() {
+    unsafe {
+        let mut out_data = vec![0u8; 100];
+        let mut out_len = out_data.len();
+        let result = nomos_da_encoded_data_get_data(
+            ptr::null_mut(),
+            out_data.as_mut_ptr(),
+            &mut out_len,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null handle");
+    }
+}
+
+#[test]
+fn test_get_data_null_out_data() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(encoder, data.as_ptr(), data.len(), &mut out_handle);
+        assert_eq!(result, NomosDaResult::Success);
+        
+        let mut out_len = 100;
+        let result = nomos_da_encoded_data_get_data(
+            out_handle,
+            ptr::null_mut(),
+            &mut out_len,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_data");
+        
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_get_data_null_out_len() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(encoder, data.as_ptr(), data.len(), &mut out_handle);
+        assert_eq!(result, NomosDaResult::Success);
+        
+        let mut out_data = vec![0u8; 100];
+        let result = nomos_da_encoded_data_get_data(
+            out_handle,
+            out_data.as_mut_ptr(),
+            ptr::null_mut(),
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_len");
+        
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_get_data_buffer_too_small() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(encoder, data.as_ptr(), data.len(), &mut out_handle);
+        assert_eq!(result, NomosDaResult::Success);
+        
+        let mut out_data = vec![0u8; 1];
+        let mut out_len = out_data.len();
+        let result = nomos_da_encoded_data_get_data(
+            out_handle,
+            out_data.as_mut_ptr(),
+            &mut out_len,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with buffer too small");
+        assert!(out_len > 1, "out_len should be updated to required size");
+        
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+// Padding Error Cases
+#[test]
+fn test_pad_null_out_data() {
+    unsafe {
+        let data = create_test_data(15);
+        let mut out_len: usize = 0;
+        let result = nomos_da_pad_to_chunk_size(
+            data.as_ptr(),
+            data.len(),
+            ptr::null_mut(),
+            &mut out_len,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_data");
+    }
+}
+
+#[test]
+fn test_pad_null_out_len() {
+    unsafe {
+        let data = create_test_data(15);
+        let mut out_data: *mut u8 = ptr::null_mut();
+        let result = nomos_da_pad_to_chunk_size(
+            data.as_ptr(),
+            data.len(),
+            &mut out_data,
+            ptr::null_mut(),
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_len");
+        assert!(out_data.is_null(), "Output data should be null on failure");
+    }
+}
+
+#[test]
+fn test_pad_null_data_pointer() {
+    unsafe {
+        let mut out_data: *mut u8 = ptr::null_mut();
+        let mut out_len: usize = 0;
+        let result = nomos_da_pad_to_chunk_size(
+            ptr::null(),
+            10,
+            &mut out_data,
+            &mut out_len,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null data pointer (non-zero len)");
+        assert!(out_data.is_null(), "Output data should be null on failure");
+    }
+}
+
+// Share Extraction Error Cases
+#[test]
+fn test_get_share_null_handle() {
+    unsafe {
+        let mut share_handle: *mut ShareHandle = ptr::null_mut();
+        let result = nomos_da_encoded_data_get_share(
+            ptr::null_mut(),
+            0,
+            &mut share_handle,
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null handle");
+        assert!(share_handle.is_null(), "Share handle should be null on failure");
+    }
+}
+
+#[test]
+fn test_get_share_null_output_handle() {
+    unsafe {
+        let encoder = nomos_da_encoder_new(4);
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(encoder, data.as_ptr(), data.len(), &mut out_handle);
+        assert_eq!(result, NomosDaResult::Success);
+        
+        let result = nomos_da_encoded_data_get_share(
+            out_handle,
+            0,
+            ptr::null_mut(),
+        );
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null output handle");
+        
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
     }
 }
