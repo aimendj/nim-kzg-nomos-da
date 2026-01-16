@@ -2,13 +2,15 @@
 
 use kzgrs_backend::encoder::DaEncoderParams;
 use nomos_da_ffi::{
-    nomos_da_cleanup, nomos_da_encoder_encode, nomos_da_encoder_free,
+    nomos_da_cleanup, nomos_da_commitments_deserialize, nomos_da_commitments_free,
+    nomos_da_commitments_serialize, nomos_da_encoder_encode, nomos_da_encoder_free,
     nomos_da_encoder_new, nomos_da_encoded_data_free,
     nomos_da_encoded_data_get_data, nomos_da_encoded_data_get_share,
     nomos_da_encoded_data_get_share_count, nomos_da_free_padded_data,
-    nomos_da_init, nomos_da_pad_to_chunk_size, nomos_da_share_free,
-    nomos_da_verifier_free, nomos_da_verifier_new, nomos_da_verifier_verify,
-    EncodedDataHandle, NomosDaResult, ShareHandle,
+    nomos_da_init, nomos_da_pad_to_chunk_size, nomos_da_share_deserialize,
+    nomos_da_share_free, nomos_da_share_free_serialized, nomos_da_share_get_commitments,
+    nomos_da_share_serialize, nomos_da_verifier_free, nomos_da_verifier_new,
+    nomos_da_verifier_verify, CommitmentsHandle, EncodedDataHandle, NomosDaResult, ShareHandle,
 };
 use std::ptr;
 
@@ -524,6 +526,220 @@ fn test_verifier_verify_null_handles() {
         nomos_da_verifier_free(verifier);
         nomos_da_encoded_data_free(out_handle);
         nomos_da_encoder_free(encoder);
+    }
+}
+
+// ============================================================================
+// Share Serialization Tests
+// ============================================================================
+
+#[test]
+fn test_share_serialize_deserialize_round_trip() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+        assert!(share_count > 0, "Should have at least one share (share_count: {}, chunk_size: {})", share_count, CHUNK_SIZE);
+
+        for i in 0..share_count {
+            let mut share_handle: *mut ShareHandle = ptr::null_mut();
+            let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+            assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+            assert!(!share_handle.is_null(), "Share handle should not be null (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+
+            let original_share_idx = (*share_handle).share.share_idx;
+            let original_column_len = (*share_handle).share.column_len();
+
+            let mut serialized_buffer: *mut u8 = ptr::null_mut();
+            let mut serialized_len: usize = 0;
+            let serialize_result = nomos_da_share_serialize(share_handle, &mut serialized_buffer, &mut serialized_len);
+            assert_eq!(serialize_result, NomosDaResult::Success, "Share serialization should succeed (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+            assert!(!serialized_buffer.is_null(), "Serialized buffer should not be null (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+            assert!(serialized_len > 0, "Serialized length should be greater than 0 (share_index: {}, serialized_len: {}, chunk_size: {})", i, serialized_len, CHUNK_SIZE);
+
+            let mut deserialized_share: *mut ShareHandle = ptr::null_mut();
+            let deserialize_result = nomos_da_share_deserialize(serialized_buffer, serialized_len, &mut deserialized_share);
+            assert_eq!(deserialize_result, NomosDaResult::Success, "Share deserialization should succeed (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+            assert!(!deserialized_share.is_null(), "Deserialized share handle should not be null (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+
+            assert_eq!((*deserialized_share).share.share_idx, original_share_idx, "Share index should match after deserialization (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+            assert_eq!((*deserialized_share).share.column_len(), original_column_len, "Column length should match after deserialization (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+
+            nomos_da_share_free_serialized(serialized_buffer, serialized_len);
+            nomos_da_share_free(deserialized_share);
+            nomos_da_share_free(share_handle);
+        }
+
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_commitments_serialize_deserialize_round_trip() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let mut share_handle: *mut ShareHandle = ptr::null_mut();
+        let result = nomos_da_encoded_data_get_share(out_handle, 0, &mut share_handle);
+        assert_eq!(result, NomosDaResult::Success, "Should successfully get share (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let mut commitments_handle: *mut CommitmentsHandle = ptr::null_mut();
+        let result = nomos_da_share_get_commitments(share_handle, &mut commitments_handle);
+        assert_eq!(result, NomosDaResult::Success, "Should successfully get commitments (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+        assert!(!commitments_handle.is_null(), "Commitments handle should not be null (chunk_size: {})", CHUNK_SIZE);
+
+        let original_commitments_count = (*commitments_handle).commitments.rows_commitments.len();
+
+        let mut serialized_buffer: *mut u8 = ptr::null_mut();
+        let mut serialized_len: usize = 0;
+        let serialize_result = nomos_da_commitments_serialize(commitments_handle, &mut serialized_buffer, &mut serialized_len);
+        assert_eq!(serialize_result, NomosDaResult::Success, "Commitments serialization should succeed (chunk_size: {})", CHUNK_SIZE);
+        assert!(!serialized_buffer.is_null(), "Serialized buffer should not be null (chunk_size: {})", CHUNK_SIZE);
+        assert!(serialized_len > 0, "Serialized length should be greater than 0 (serialized_len: {}, chunk_size: {})", serialized_len, CHUNK_SIZE);
+
+        let mut deserialized_commitments: *mut CommitmentsHandle = ptr::null_mut();
+        let deserialize_result = nomos_da_commitments_deserialize(serialized_buffer, serialized_len, &mut deserialized_commitments);
+        assert_eq!(deserialize_result, NomosDaResult::Success, "Commitments deserialization should succeed (chunk_size: {})", CHUNK_SIZE);
+        assert!(!deserialized_commitments.is_null(), "Deserialized commitments handle should not be null (chunk_size: {})", CHUNK_SIZE);
+
+        assert_eq!((*deserialized_commitments).commitments.rows_commitments.len(), original_commitments_count, "Commitments count should match after deserialization (chunk_size: {})", CHUNK_SIZE);
+
+        nomos_da_share_free_serialized(serialized_buffer, serialized_len);
+        nomos_da_commitments_free(deserialized_commitments);
+        nomos_da_commitments_free(commitments_handle);
+        nomos_da_share_free(share_handle);
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_share_serialize_null_handles() {
+    unsafe {
+        let mut buffer: *mut u8 = ptr::null_mut();
+        let mut len: usize = 0;
+
+        let result_null_share = nomos_da_share_serialize(ptr::null_mut(), &mut buffer, &mut len);
+        assert_eq!(result_null_share, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null share handle");
+
+        let result_null_buffer = nomos_da_share_serialize(ptr::null_mut(), ptr::null_mut(), &mut len);
+        assert_eq!(result_null_buffer, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null buffer pointer");
+
+        let result_null_len = nomos_da_share_serialize(ptr::null_mut(), &mut buffer, ptr::null_mut());
+        assert_eq!(result_null_len, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null length pointer");
+    }
+}
+
+#[test]
+fn test_share_deserialize_null_handles() {
+    unsafe {
+        let data = vec![0u8; 10];
+        let mut share_handle: *mut ShareHandle = ptr::null_mut();
+
+        let result_null_data = nomos_da_share_deserialize(ptr::null_mut(), 10, &mut share_handle);
+        assert_eq!(result_null_data, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with null data pointer");
+
+        let result_null_output = nomos_da_share_deserialize(data.as_ptr(), 10, ptr::null_mut());
+        assert_eq!(result_null_output, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with null output handle");
+
+        let result_zero_len = nomos_da_share_deserialize(data.as_ptr(), 0, &mut share_handle);
+        assert_eq!(result_zero_len, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with zero length");
+    }
+}
+
+#[test]
+fn test_share_deserialize_invalid_data() {
+    unsafe {
+        let invalid_data = vec![0u8; 100];
+        let mut share_handle: *mut ShareHandle = ptr::null_mut();
+
+        let result = nomos_da_share_deserialize(invalid_data.as_ptr(), invalid_data.len(), &mut share_handle);
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with invalid data");
+        assert!(share_handle.is_null(), "Share handle should be null on deserialization failure");
+    }
+}
+
+#[test]
+fn test_commitments_serialize_null_handles() {
+    unsafe {
+        let mut buffer: *mut u8 = ptr::null_mut();
+        let mut len: usize = 0;
+
+        let result_null_commitments = nomos_da_commitments_serialize(ptr::null_mut(), &mut buffer, &mut len);
+        assert_eq!(result_null_commitments, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null commitments handle");
+
+        let result_null_buffer = nomos_da_commitments_serialize(ptr::null_mut(), ptr::null_mut(), &mut len);
+        assert_eq!(result_null_buffer, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null buffer pointer");
+
+        let result_null_len = nomos_da_commitments_serialize(ptr::null_mut(), &mut buffer, ptr::null_mut());
+        assert_eq!(result_null_len, NomosDaResult::ErrorInvalidInput, "Serialization should fail with null length pointer");
+    }
+}
+
+#[test]
+fn test_commitments_deserialize_null_handles() {
+    unsafe {
+        let data = vec![0u8; 10];
+        let mut commitments_handle: *mut CommitmentsHandle = ptr::null_mut();
+
+        let result_null_data = nomos_da_commitments_deserialize(ptr::null_mut(), 10, &mut commitments_handle);
+        assert_eq!(result_null_data, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with null data pointer");
+
+        let result_null_output = nomos_da_commitments_deserialize(data.as_ptr(), 10, ptr::null_mut());
+        assert_eq!(result_null_output, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with null output handle");
+
+        let result_zero_len = nomos_da_commitments_deserialize(data.as_ptr(), 0, &mut commitments_handle);
+        assert_eq!(result_zero_len, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with zero length");
+    }
+}
+
+#[test]
+fn test_commitments_deserialize_invalid_data() {
+    unsafe {
+        let invalid_data = vec![0u8; 100];
+        let mut commitments_handle: *mut CommitmentsHandle = ptr::null_mut();
+
+        let result = nomos_da_commitments_deserialize(invalid_data.as_ptr(), invalid_data.len(), &mut commitments_handle);
+        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Deserialization should fail with invalid data");
+        assert!(commitments_handle.is_null(), "Commitments handle should be null on deserialization failure");
+    }
+}
+
+#[test]
+fn test_share_get_commitments_null_handles() {
+    unsafe {
+        let mut commitments_handle: *mut CommitmentsHandle = ptr::null_mut();
+
+        let result_null_share = nomos_da_share_get_commitments(ptr::null_mut(), &mut commitments_handle);
+        assert_eq!(result_null_share, NomosDaResult::ErrorInvalidInput, "Should fail with null share handle");
+
+        let result_null_output = nomos_da_share_get_commitments(ptr::null_mut(), ptr::null_mut());
+        assert_eq!(result_null_output, NomosDaResult::ErrorInvalidInput, "Should fail with null output handle");
     }
 }
 
