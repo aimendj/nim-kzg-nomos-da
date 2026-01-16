@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use kzgrs::KzgRsError;
 use kzgrs_backend::{
+    common::share::DaShare,
     encoder::{DaEncoder, DaEncoderParams, EncodedData},
     kzg_keys::VERIFICATION_KEY,
     verifier::DaVerifier,
@@ -67,6 +68,12 @@ pub struct EncodedDataHandle {
     pub data: EncodedData,
 }
 
+/// Opaque handle for a share
+#[repr(C)]
+pub struct ShareHandle {
+    pub share: DaShare,
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn nomos_da_free_string(s: *mut c_char) {
     if !s.is_null() {
@@ -111,6 +118,13 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
     out_handle: *mut *mut EncodedDataHandle,
 ) -> NomosDaResult {
     if encoder.is_null() || data.is_null() || out_handle.is_null() {
+        if encoder.is_null() {
+            set_error(format!("Encoder handle is null (data_len: {})", data_len));
+        } else if data.is_null() {
+            set_error(format!("Data pointer is null (data_len: {})", data_len));
+        } else {
+            set_error(format!("Output handle is null (data_len: {})", data_len));
+        }
         return NomosDaResult::ErrorInvalidInput;
     }
 
@@ -128,6 +142,7 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
         return pad_result;
     }
 
+    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
     let padded_slice = std::slice::from_raw_parts(padded_data_ptr, padded_len);
     let result = match (*encoder).encoder.encode(padded_slice) {
         Ok(encoded) => {
@@ -135,7 +150,10 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
             NomosDaResult::Success
         }
         Err(e) => {
-            set_error(format!("Encoding error: {:?}", e));
+            set_error(format!(
+                "Encoding error: {:?} (data_len: {}, padded_len: {}, chunk_size: {})",
+                e, data_len, padded_len, chunk_size
+            ));
             NomosDaResult::ErrorInternal
         }
     };
@@ -201,22 +219,32 @@ pub unsafe extern "C" fn nomos_da_pad_to_chunk_size(
     out_len: *mut CSizeT,
 ) -> NomosDaResult {
     if out_data.is_null() || out_len.is_null() {
+        let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
+        if out_data.is_null() {
+            set_error(format!("Output data pointer is null (data_len: {}, chunk_size: {})", data_len, chunk_size));
+        } else {
+            set_error(format!("Output length pointer is null (data_len: {}, chunk_size: {})", data_len, chunk_size));
+        }
         return NomosDaResult::ErrorInvalidInput;
     }
 
+    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
+    
     if data_len == 0 {
         set_error(format!(
-            "Data length must be greater than 0, got {}",
-            data_len
+            "Data length must be greater than 0, got {} (chunk_size: {})",
+            data_len, chunk_size
         ));
         return NomosDaResult::ErrorInvalidInput;
     }
 
     if data.is_null() {
+        set_error(format!(
+            "Data pointer is null (data_len: {}, chunk_size: {})",
+            data_len, chunk_size
+        ));
         return NomosDaResult::ErrorInvalidInput;
     }
-
-    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
     let padding_needed = if data_len % chunk_size == 0 {
         0
     } else {
@@ -247,5 +275,53 @@ pub unsafe extern "C" fn nomos_da_free_padded_data(data: *mut u8, len: CSizeT) {
     if !data.is_null() && len > 0 {
         let slice_ptr: *mut [u8] = ptr::slice_from_raw_parts_mut(data, len);
         let _ = Box::from_raw(slice_ptr);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_encoded_data_get_share_count(
+    handle: *mut EncodedDataHandle,
+) -> CSizeT {
+    if handle.is_null() {
+        return 0;
+    }
+    (*handle).data.combined_column_proofs.len()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_encoded_data_get_share(
+    handle: *mut EncodedDataHandle,
+    index: CSizeT,
+    out_share_handle: *mut *mut ShareHandle,
+) -> NomosDaResult {
+    if handle.is_null() || out_share_handle.is_null() {
+        if handle.is_null() {
+            set_error(format!("EncodedData handle is null (share_index: {})", index));
+        } else {
+            set_error(format!("Output share handle is null (share_index: {})", index));
+        }
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    match (*handle).data.to_da_share(index) {
+        Some(share) => {
+            *out_share_handle = Box::into_raw(Box::new(ShareHandle { share }));
+            NomosDaResult::Success
+        }
+        None => {
+            let share_count = (*handle).data.combined_column_proofs.len();
+            set_error(format!(
+                "Share index {} is out of bounds. Valid range: 0..{} (share_count: {})",
+                index, share_count, share_count
+            ));
+            NomosDaResult::ErrorInvalidInput
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_share_free(handle: *mut ShareHandle) {
+    if !handle.is_null() {
+        let _ = Box::from_raw(handle);
     }
 }
