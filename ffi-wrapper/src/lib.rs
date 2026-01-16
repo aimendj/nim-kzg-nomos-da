@@ -12,7 +12,7 @@ use kzgrs_backend::{
     kzg_keys::VERIFICATION_KEY,
     verifier::DaVerifier,
 };
-use nomos_core::da::DaEncoder as _;
+use nomos_core::da::{blob::Share as _, DaEncoder as _};
 
 pub type CSizeT = usize;
 
@@ -324,4 +324,48 @@ pub unsafe extern "C" fn nomos_da_share_free(handle: *mut ShareHandle) {
     if !handle.is_null() {
         let _ = Box::from_raw(handle);
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_verifier_verify(
+    verifier: *mut VerifierHandle,
+    share_handle: *mut ShareHandle,
+    rows_domain_size: CSizeT,
+) -> bool {
+    if verifier.is_null() || share_handle.is_null() {
+        if verifier.is_null() {
+            set_error(format!(
+                "Verifier handle is null (rows_domain_size: {})",
+                rows_domain_size
+            ));
+        } else {
+            set_error(format!(
+                "Share handle is null (rows_domain_size: {})",
+                rows_domain_size
+            ));
+        }
+        return false;
+    }
+
+    if rows_domain_size == 0 {
+        set_error(format!(
+            "Rows domain size must be greater than 0, got {}",
+            rows_domain_size
+        ));
+        return false;
+    }
+
+    let share = &(*share_handle).share;
+    let (light_share, commitments) = share.clone().into_share_and_commitments();
+    
+    let is_valid = (*verifier).verifier.verify(&light_share, &commitments, rows_domain_size);
+    
+    if !is_valid {
+        set_error(format!(
+            "Share verification failed (share_idx: {}, rows_domain_size: {})",
+            light_share.share_idx, rows_domain_size
+        ));
+    }
+    
+    is_valid
 }
