@@ -6,11 +6,12 @@ use nomos_da_ffi::{
     nomos_da_commitments_serialize, nomos_da_encoder_encode, nomos_da_encoder_free,
     nomos_da_encoder_new, nomos_da_encoded_data_free,
     nomos_da_encoded_data_get_data, nomos_da_encoded_data_get_share,
-    nomos_da_encoded_data_get_share_count, nomos_da_free_padded_data,
-    nomos_da_init, nomos_da_pad_to_chunk_size, nomos_da_share_deserialize,
-    nomos_da_share_free, nomos_da_share_free_serialized, nomos_da_share_get_commitments,
-    nomos_da_share_serialize, nomos_da_verifier_free, nomos_da_verifier_new,
-    nomos_da_verifier_verify, CommitmentsHandle, EncodedDataHandle, NomosDaResult, ShareHandle,
+    nomos_da_encoded_data_get_share_count,
+    nomos_da_init, nomos_da_reconstruct, nomos_da_reconstruct_free,
+    nomos_da_share_deserialize, nomos_da_share_free, nomos_da_share_free_serialized,
+    nomos_da_share_get_commitments, nomos_da_share_get_index, nomos_da_share_serialize, nomos_da_verifier_free,
+    nomos_da_verifier_new, nomos_da_verifier_verify, CommitmentsHandle, EncodedDataHandle,
+    NomosDaResult, ShareHandle,
 };
 use std::ptr;
 
@@ -127,63 +128,6 @@ unsafe fn test_encode_failure(data_size: usize, column_count: usize) {
     nomos_da_encoder_free(encoder);
 }
 
-unsafe fn test_padding(data_size: usize) {
-    let data = create_test_data(data_size);
-
-    let mut out_data: *mut u8 = ptr::null_mut();
-    let mut out_len: usize = 0;
-
-    let result = nomos_da_pad_to_chunk_size(
-        data.as_ptr(),
-        data_size,
-        &mut out_data,
-        &mut out_len,
-    );
-
-    assert_eq!(result, NomosDaResult::Success, "Padding should succeed (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
-    assert!(!out_data.is_null(), "Output data pointer should not be null (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
-    
-    let expected_padded_len = if data_size % CHUNK_SIZE == 0 {
-        data_size
-    } else {
-        data_size + (CHUNK_SIZE - (data_size % CHUNK_SIZE))
-    };
-    
-    assert_eq!(out_len, expected_padded_len, "Padded length should be {} for input size {} (chunk_size: {})", expected_padded_len, data_size, CHUNK_SIZE);
-    assert_eq!(out_len % CHUNK_SIZE, 0, "Padded length should be a multiple of {} (data_size: {}, chunk_size: {})", CHUNK_SIZE, data_size, CHUNK_SIZE);
-
-    let padded_slice = std::slice::from_raw_parts(out_data, out_len);
-    
-    assert_eq!(&padded_slice[..data_size], data.as_slice(), "Original data should be preserved at the beginning (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
-    
-    for i in data_size..out_len {
-        assert_eq!(padded_slice[i], 0, "Padding byte at index {} should be zero (data_size: {}, chunk_size: {})", i, data_size, CHUNK_SIZE);
-    }
-
-    nomos_da_free_padded_data(out_data, out_len);
-}
-
-unsafe fn test_padding_failure(data_size: usize) {
-    let data = if data_size > 0 {
-        create_test_data(data_size)
-    } else {
-        Vec::new()
-    };
-
-    let mut out_data: *mut u8 = ptr::null_mut();
-    let mut out_len: usize = 0;
-
-    let result = nomos_da_pad_to_chunk_size(
-        if data_size > 0 { data.as_ptr() } else { ptr::null() },
-        data_size,
-        &mut out_data,
-        &mut out_len,
-    );
-
-    assert_ne!(result, NomosDaResult::Success, "Padding should fail (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
-    assert!(out_data.is_null(), "Output data pointer should be null on failure (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
-}
-
 // ============================================================================
 // Utility Tests
 // ============================================================================
@@ -222,18 +166,32 @@ fn test_encode_size_0() {
 }
 
 #[test]
-fn test_encode_size_less_than_chunk() {
-    unsafe { test_encode_success(15, 4); }
-}
-
-#[test]
-fn test_encode_size_more_than_chunk_not_multiple() {
+fn test_encode_not_multiple_of_chunk_size() {
     unsafe {
-        test_encode_success(32, 4);
-        test_encode_success(50, 4);
-        test_encode_success(60, 4);
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        // Test with data length that is not a multiple of chunk size
+        let invalid_sizes = [1, CHUNK_SIZE - 1, CHUNK_SIZE + 1, 2 * CHUNK_SIZE - 1];
+        
+        for data_size in invalid_sizes.iter() {
+            let data = create_test_data(*data_size);
+            let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+            let result = nomos_da_encoder_encode(
+                encoder,
+                data.as_ptr(),
+                data.len(),
+                &mut out_handle,
+            );
+            assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Encoding should fail when data length is not a multiple of chunk size (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
+            assert!(out_handle.is_null(), "Output handle should be null on failure (data_size: {}, chunk_size: {})", data_size, CHUNK_SIZE);
+        }
+
+        nomos_da_encoder_free(encoder);
     }
 }
+
 
 #[test]
 fn test_encode_various_sizes_and_column_counts() {
@@ -246,31 +204,6 @@ fn test_encode_various_sizes_and_column_counts() {
                 let data_size = *multiplier * CHUNK_SIZE;
                 test_encode_success(data_size, *column_count);
             }
-        }
-    }
-}
-
-// ============================================================================
-// Padding Tests
-// ============================================================================
-
-#[test]
-fn test_pad_size_0() {
-    unsafe { test_padding_failure(0); }
-}
-
-#[test]
-fn test_pad_various_sizes() {
-    unsafe {
-        let sizes = [
-            15,                                    // less than chunk
-            CHUNK_SIZE,                            // exactly one chunk
-            45,                                    // between 1 and 2 chunks
-            2 * CHUNK_SIZE,                        // exactly 2 chunks
-        ];
-        
-        for size in sizes.iter() {
-            test_padding(*size);
         }
     }
 }
@@ -639,6 +572,48 @@ fn test_commitments_serialize_deserialize_round_trip() {
 }
 
 #[test]
+fn test_share_get_index() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            data.as_ptr(),
+            data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+        assert_eq!(share_count, column_count, "Share count should equal column_count (share_count: {}, column_count: {}, chunk_size: {})", share_count, column_count, CHUNK_SIZE);
+
+        // Test getting index from multiple shares
+        for i in 0..share_count {
+            let mut share_handle: *mut ShareHandle = ptr::null_mut();
+            let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+            assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+            assert!(!share_handle.is_null(), "Share handle should not be null (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+
+            let share_idx = nomos_da_share_get_index(share_handle);
+            assert_eq!(share_idx, i as u16, "Share index should match (expected: {}, got: {}, chunk_size: {})", i, share_idx, CHUNK_SIZE);
+
+            nomos_da_share_free(share_handle);
+        }
+
+        // Test null handle returns 0
+        let null_idx = nomos_da_share_get_index(ptr::null_mut());
+        assert_eq!(null_idx, 0, "Null share handle should return index 0 (chunk_size: {})", CHUNK_SIZE);
+
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
 fn test_share_serialize_null_handles() {
     unsafe {
         let mut buffer: *mut u8 = ptr::null_mut();
@@ -742,6 +717,168 @@ fn test_share_get_commitments_null_handles() {
         assert_eq!(result_null_output, NomosDaResult::ErrorInvalidInput, "Should fail with null output handle");
     }
 }
+
+// ============================================================================
+// Data Reconstruction Tests
+// ============================================================================
+
+#[test]
+fn test_reconstruct_from_all_shares() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let original_data = create_test_data(CHUNK_SIZE);
+        let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+        let result = nomos_da_encoder_encode(
+            encoder,
+            original_data.as_ptr(),
+            original_data.len(),
+            &mut out_handle,
+        );
+        assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+        assert_eq!(share_count, column_count, "Share count should equal column_count (share_count: {}, column_count: {}, chunk_size: {})", share_count, column_count, CHUNK_SIZE);
+
+        // For reconstruction, we only need the first column_count/2 shares (original columns)
+        // The remaining shares are RS-encoded redundancy
+        let original_share_count = column_count / 2;
+
+        let mut share_handles: Vec<*mut ShareHandle> = Vec::with_capacity(original_share_count);
+        for i in 0..original_share_count {
+            let mut share_handle: *mut ShareHandle = ptr::null_mut();
+            let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+            assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, column_count: {}, chunk_size: {})", i, column_count, CHUNK_SIZE);
+            assert!(!share_handle.is_null(), "Share handle should not be null (share_index: {}, chunk_size: {})", i, CHUNK_SIZE);
+            share_handles.push(share_handle);
+        }
+
+        let mut reconstructed_data: *mut u8 = ptr::null_mut();
+        let mut reconstructed_len: usize = 0;
+        let reconstruct_result = nomos_da_reconstruct(
+            share_handles.as_ptr(),
+            share_handles.len(),
+            &mut reconstructed_data,
+            &mut reconstructed_len,
+        );
+        assert_eq!(reconstruct_result, NomosDaResult::Success, "Reconstruction should succeed (share_count: {}, chunk_size: {})", share_count, CHUNK_SIZE);
+        assert!(!reconstructed_data.is_null(), "Reconstructed data should not be null (chunk_size: {})", CHUNK_SIZE);
+        assert!(reconstructed_len > 0, "Reconstructed length should be greater than 0 (reconstructed_len: {}, chunk_size: {})", reconstructed_len, CHUNK_SIZE);
+
+        // Calculate expected reconstructed size (padded to row boundaries)
+        // Row size = (column_count / 2) * chunk_size
+        let row_size = (column_count / 2) * CHUNK_SIZE;
+        let num_rows = (original_data.len() + row_size - 1) / row_size; // Ceiling division
+        let expected_reconstructed_len = num_rows * row_size;
+        
+        assert_eq!(reconstructed_len, expected_reconstructed_len, "Reconstructed length should match expected padded size (reconstructed_len: {}, expected_len: {}, original_len: {}, row_size: {}, num_rows: {}, chunk_size: {})", reconstructed_len, expected_reconstructed_len, original_data.len(), row_size, num_rows, CHUNK_SIZE);
+        
+        let reconstructed_slice = std::slice::from_raw_parts(reconstructed_data, reconstructed_len);
+        // Check that the original data matches the beginning of reconstructed data
+        assert_eq!(&reconstructed_slice[..original_data.len()], original_data.as_slice(), "Reconstructed data prefix should match original (reconstructed_len: {}, original_len: {}, chunk_size: {})", reconstructed_len, original_data.len(), CHUNK_SIZE);
+        // Check that the padding is zeros
+        if reconstructed_len > original_data.len() {
+            let padding = &reconstructed_slice[original_data.len()..];
+            assert!(padding.iter().all(|&b| b == 0), "Padding should be zeros (reconstructed_len: {}, original_len: {}, chunk_size: {})", reconstructed_len, original_data.len(), CHUNK_SIZE);
+        }
+
+        for share_handle in share_handles {
+            nomos_da_share_free(share_handle);
+        }
+        nomos_da_reconstruct_free(reconstructed_data, reconstructed_len);
+        nomos_da_encoded_data_free(out_handle);
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_reconstruct_different_data_sizes() {
+    unsafe {
+        let column_count = 4;
+        let encoder = nomos_da_encoder_new(column_count);
+        assert!(!encoder.is_null(), "Encoder should be created (column_count: {}, chunk_size: {})", column_count, CHUNK_SIZE);
+
+        for data_size in [3 * CHUNK_SIZE, 2 * CHUNK_SIZE, CHUNK_SIZE] {
+            let original_data = create_test_data(data_size);
+            let mut out_handle: *mut EncodedDataHandle = ptr::null_mut();
+            let result = nomos_da_encoder_encode(
+                encoder,
+                original_data.as_ptr(),
+                original_data.len(),
+                &mut out_handle,
+            );
+            assert_eq!(result, NomosDaResult::Success, "Encoding should succeed (data_size: {}, column_count: {}, chunk_size: {})", data_size, column_count, CHUNK_SIZE);
+
+            let share_count = nomos_da_encoded_data_get_share_count(out_handle);
+            let original_share_count = column_count / 2;
+            let mut share_handles: Vec<*mut ShareHandle> = Vec::with_capacity(original_share_count);
+            for i in 0..original_share_count {
+                let mut share_handle: *mut ShareHandle = ptr::null_mut();
+                let result = nomos_da_encoded_data_get_share(out_handle, i, &mut share_handle);
+                assert_eq!(result, NomosDaResult::Success, "Should successfully get share (share_index: {}, data_size: {}, chunk_size: {})", i, data_size, CHUNK_SIZE);
+                share_handles.push(share_handle);
+            }
+
+            let mut reconstructed_data: *mut u8 = ptr::null_mut();
+            let mut reconstructed_len: usize = 0;
+            let reconstruct_result = nomos_da_reconstruct(
+                share_handles.as_ptr(),
+                share_handles.len(),
+                &mut reconstructed_data,
+                &mut reconstructed_len,
+            );
+            assert_eq!(reconstruct_result, NomosDaResult::Success, "Reconstruction should succeed (data_size: {}, share_count: {}, chunk_size: {})", data_size, share_count, CHUNK_SIZE);
+
+            // Calculate expected reconstructed size (padded to row boundaries)
+            // Row size = (column_count / 2) * chunk_size
+            let row_size = (column_count / 2) * CHUNK_SIZE;
+            let num_rows = (original_data.len() + row_size - 1) / row_size; // Ceiling division
+            let expected_reconstructed_len = num_rows * row_size;
+            
+            assert_eq!(reconstructed_len, expected_reconstructed_len, "Reconstructed length should match expected padded size (data_size: {}, reconstructed_len: {}, expected_len: {}, row_size: {}, num_rows: {}, chunk_size: {})", data_size, reconstructed_len, expected_reconstructed_len, row_size, num_rows, CHUNK_SIZE);
+            
+            let reconstructed_slice = std::slice::from_raw_parts(reconstructed_data, reconstructed_len);
+            // Check that the original data matches the beginning of reconstructed data
+            assert_eq!(&reconstructed_slice[..original_data.len()], original_data.as_slice(), "Reconstructed data prefix should match original (data_size: {}, reconstructed_len: {}, original_len: {}, chunk_size: {})", data_size, reconstructed_len, original_data.len(), CHUNK_SIZE);
+            // Check that the padding is zeros
+            if reconstructed_len > original_data.len() {
+                let padding = &reconstructed_slice[original_data.len()..];
+                assert!(padding.iter().all(|&b| b == 0), "Padding should be zeros (data_size: {}, reconstructed_len: {}, original_len: {}, chunk_size: {})", data_size, reconstructed_len, original_data.len(), CHUNK_SIZE);
+            }
+
+            for share_handle in share_handles {
+                nomos_da_share_free(share_handle);
+            }
+            nomos_da_reconstruct_free(reconstructed_data, reconstructed_len);
+            nomos_da_encoded_data_free(out_handle);
+        }
+
+        nomos_da_encoder_free(encoder);
+    }
+}
+
+#[test]
+fn test_reconstruct_null_handles() {
+    unsafe {
+        let mut data: *mut u8 = ptr::null_mut();
+        let mut len: usize = 0;
+
+        let result_null_shares = nomos_da_reconstruct(ptr::null(), 4, &mut data, &mut len);
+        assert_eq!(result_null_shares, NomosDaResult::ErrorInvalidInput, "Reconstruction should fail with null shares array");
+
+        let result_null_output = nomos_da_reconstruct(ptr::null(), 4, ptr::null_mut(), &mut len);
+        assert_eq!(result_null_output, NomosDaResult::ErrorInvalidInput, "Reconstruction should fail with null output data pointer");
+
+        let result_null_len = nomos_da_reconstruct(ptr::null(), 4, &mut data, ptr::null_mut());
+        assert_eq!(result_null_len, NomosDaResult::ErrorInvalidInput, "Reconstruction should fail with null length pointer");
+
+        let result_zero_count = nomos_da_reconstruct(ptr::null(), 0, &mut data, &mut len);
+        assert_eq!(result_zero_count, NomosDaResult::ErrorInvalidInput, "Reconstruction should fail with zero share count");
+    }
+}
+
 
 // ============================================================================
 // Error Handling Tests
@@ -879,54 +1016,6 @@ fn test_get_data_buffer_too_small() {
         
         nomos_da_encoded_data_free(out_handle);
         nomos_da_encoder_free(encoder);
-    }
-}
-
-// Padding Error Cases
-#[test]
-fn test_pad_null_out_data() {
-    unsafe {
-        let data = create_test_data(15);
-        let mut out_len: usize = 0;
-        let result = nomos_da_pad_to_chunk_size(
-            data.as_ptr(),
-            data.len(),
-            ptr::null_mut(),
-            &mut out_len,
-        );
-        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_data");
-    }
-}
-
-#[test]
-fn test_pad_null_out_len() {
-    unsafe {
-        let data = create_test_data(15);
-        let mut out_data: *mut u8 = ptr::null_mut();
-        let result = nomos_da_pad_to_chunk_size(
-            data.as_ptr(),
-            data.len(),
-            &mut out_data,
-            ptr::null_mut(),
-        );
-        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null out_len");
-        assert!(out_data.is_null(), "Output data should be null on failure");
-    }
-}
-
-#[test]
-fn test_pad_null_data_pointer() {
-    unsafe {
-        let mut out_data: *mut u8 = ptr::null_mut();
-        let mut out_len: usize = 0;
-        let result = nomos_da_pad_to_chunk_size(
-            ptr::null(),
-            10,
-            &mut out_data,
-            &mut out_len,
-        );
-        assert_eq!(result, NomosDaResult::ErrorInvalidInput, "Should fail with null data pointer (non-zero len)");
-        assert!(out_data.is_null(), "Output data should be null on failure");
     }
 }
 
