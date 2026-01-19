@@ -10,6 +10,7 @@ use kzgrs_backend::{
     common::share::{DaShare, DaSharesCommitments},
     encoder::{DaEncoder, DaEncoderParams, EncodedData},
     kzg_keys::VERIFICATION_KEY,
+    reconstruction::reconstruct_without_missing_data,
     verifier::DaVerifier,
 };
 use nomos_core::{
@@ -137,37 +138,40 @@ pub unsafe extern "C" fn nomos_da_encoder_encode(
         return NomosDaResult::ErrorInvalidInput;
     }
 
-    let mut padded_data_ptr: *mut u8 = ptr::null_mut();
-    let mut padded_len: CSizeT = 0;
-
-    let pad_result = nomos_da_pad_to_chunk_size(
-        data,
-        data_len,
-        &mut padded_data_ptr,
-        &mut padded_len,
-    );
-
-    if pad_result != NomosDaResult::Success {
-        return pad_result;
+    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
+    
+    // Validate that data length is a multiple of chunk size
+    if data_len == 0 {
+        set_error(format!(
+            "Data length must be greater than 0 (chunk_size: {})",
+            chunk_size
+        ));
+        return NomosDaResult::ErrorInvalidInput;
+    }
+    
+    if data_len % chunk_size != 0 {
+        set_error(format!(
+            "Data length must be a multiple of chunk size (data_len: {}, chunk_size: {})",
+            data_len, chunk_size
+        ));
+        return NomosDaResult::ErrorInvalidInput;
     }
 
-    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
-    let padded_slice = std::slice::from_raw_parts(padded_data_ptr, padded_len);
-    let result = match (*encoder).encoder.encode(padded_slice) {
+    let data_slice = std::slice::from_raw_parts(data, data_len);
+    let result = match (*encoder).encoder.encode(data_slice) {
         Ok(encoded) => {
             *out_handle = Box::into_raw(Box::new(EncodedDataHandle { data: encoded }));
             NomosDaResult::Success
         }
         Err(e) => {
             set_error(format!(
-                "Encoding error: {:?} (data_len: {}, padded_len: {}, chunk_size: {})",
-                e, data_len, padded_len, chunk_size
+                "Encoding error: {:?} (data_len: {}, chunk_size: {})",
+                e, data_len, chunk_size
             ));
             NomosDaResult::ErrorInternal
         }
     };
 
-    nomos_da_free_padded_data(padded_data_ptr, padded_len);
     result
 }
 
@@ -221,73 +225,6 @@ pub extern "C" fn nomos_da_max_chunk_size() -> CSizeT {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn nomos_da_pad_to_chunk_size(
-    data: *const u8,
-    data_len: CSizeT,
-    out_data: *mut *mut u8,
-    out_len: *mut CSizeT,
-) -> NomosDaResult {
-    if out_data.is_null() || out_len.is_null() {
-        let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
-        if out_data.is_null() {
-            set_error(format!("Output data pointer is null (data_len: {}, chunk_size: {})", data_len, chunk_size));
-        } else {
-            set_error(format!("Output length pointer is null (data_len: {}, chunk_size: {})", data_len, chunk_size));
-        }
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    let chunk_size = DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE;
-    
-    if data_len == 0 {
-        set_error(format!(
-            "Data length must be greater than 0, got {} (chunk_size: {})",
-            data_len, chunk_size
-        ));
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    if data.is_null() {
-        set_error(format!(
-            "Data pointer is null (data_len: {}, chunk_size: {})",
-            data_len, chunk_size
-        ));
-        return NomosDaResult::ErrorInvalidInput;
-    }
-    let padding_needed = if data_len % chunk_size == 0 {
-        0
-    } else {
-        chunk_size - (data_len % chunk_size)
-    };
-    let padded_len = data_len + padding_needed;
-
-    let mut padded = vec![0u8; padded_len];
-    if data_len > 0 {
-        ptr::copy_nonoverlapping(
-            data,
-            padded.as_mut_ptr(),
-            data_len,
-        );
-    }
-
-    let boxed = padded.into_boxed_slice();
-    let ptr = Box::into_raw(boxed) as *mut u8;
-    
-    *out_data = ptr;
-    *out_len = padded_len;
-
-    NomosDaResult::Success
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_free_padded_data(data: *mut u8, len: CSizeT) {
-    if !data.is_null() && len > 0 {
-        let slice_ptr: *mut [u8] = ptr::slice_from_raw_parts_mut(data, len);
-        let _ = Box::from_raw(slice_ptr);
-    }
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn nomos_da_encoded_data_get_share_count(
     handle: *mut EncodedDataHandle,
 ) -> CSizeT {
@@ -333,6 +270,15 @@ pub unsafe extern "C" fn nomos_da_share_free(handle: *mut ShareHandle) {
     if !handle.is_null() {
         let _ = Box::from_raw(handle);
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_share_get_index(share_handle: *mut ShareHandle) -> u16 {
+    if share_handle.is_null() {
+        set_error("Share handle is null".to_string());
+        return 0;
+    }
+    (*share_handle).share.share_idx
 }
 
 #[no_mangle]
@@ -548,5 +494,68 @@ pub unsafe extern "C" fn nomos_da_commitments_deserialize(
 pub unsafe extern "C" fn nomos_da_commitments_free(handle: *mut CommitmentsHandle) {
     if !handle.is_null() {
         let _ = Box::from_raw(handle);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_reconstruct(
+    shares: *const *mut ShareHandle,
+    share_count: CSizeT,
+    out_data: *mut *mut u8,
+    out_len: *mut CSizeT,
+) -> NomosDaResult {
+    if shares.is_null() || out_data.is_null() || out_len.is_null() {
+        if shares.is_null() {
+            set_error(format!("Shares array pointer is null (share_count: {})", share_count));
+        } else if out_data.is_null() {
+            set_error(format!("Output data pointer is null (share_count: {})", share_count));
+        } else {
+            set_error(format!("Output length pointer is null (share_count: {})", share_count));
+        }
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    if share_count == 0 {
+        set_error(format!("Share count must be greater than 0, got {}", share_count));
+        return NomosDaResult::ErrorInvalidInput;
+    }
+
+    let shares_slice = std::slice::from_raw_parts(shares, share_count);
+    let mut da_shares = Vec::with_capacity(share_count);
+
+    for (i, share_handle_ptr) in shares_slice.iter().enumerate() {
+        if share_handle_ptr.is_null() {
+            set_error(format!("Share handle pointer at index {} is null (share_count: {})", i, share_count));
+            return NomosDaResult::ErrorInvalidInput;
+        }
+        let share_handle = *share_handle_ptr;
+        if share_handle.is_null() {
+            set_error(format!("Share handle at index {} is null (share_count: {})", i, share_count));
+            return NomosDaResult::ErrorInvalidInput;
+        }
+        da_shares.push((*share_handle).share.clone());
+    }
+
+    let reconstructed_data = reconstruct_without_missing_data(&da_shares);
+    
+    if reconstructed_data.is_empty() {
+        set_error(format!("Reconstructed data is empty (share_count: {})", share_count));
+        return NomosDaResult::ErrorInternal;
+    }
+
+    let len = reconstructed_data.len();
+    let boxed = reconstructed_data.into_boxed_slice();
+    let ptr = Box::into_raw(boxed) as *mut u8;
+    *out_data = ptr;
+    *out_len = len;
+
+    NomosDaResult::Success
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nomos_da_reconstruct_free(data: *mut u8, len: CSizeT) {
+    if !data.is_null() && len > 0 {
+        let slice_ptr: *mut [u8] = ptr::slice_from_raw_parts_mut(data, len);
+        let _ = Box::from_raw(slice_ptr);
     }
 }
