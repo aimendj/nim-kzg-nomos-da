@@ -33,9 +33,9 @@ build-rust:
 	fi
 	cd ffi-wrapper && cargo build --release
 
-build: build-rust
+build-nim:
 	@echo "Building Nim wrapper..."
-	nimble build
+	nim c --path:src src/kzg_nomos_da.nim
 
 clean:
 	@echo "Cleaning build artifacts..."
@@ -50,6 +50,6 @@ test-rust:
 	fi
 	cd ffi-wrapper && cargo test
 
-test:
+test-nim:
 	@echo "Running Nim tests..."
-	nimble test
+	nim c --path:src -r tests/test_encoder.nim
