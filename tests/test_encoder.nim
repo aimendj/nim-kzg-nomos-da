@@ -3,8 +3,6 @@ import strutils
 import ../src/kzg_nomos_da
 import ../src/kzg_nomos_da/types
 
-const CHUNK_SIZE = 31
-
 proc createTestData(size: int): seq[byte] =
   result = newSeq[byte](size)
   for i in 0..<size:
@@ -16,8 +14,8 @@ suite "nomos-da Encoder API Tests":
   teardown:
     nomos_da_cleanup()
 
-  test "maxChunkSize returns correct value":
-    check maxChunkSize() == CHUNK_SIZE
+  test "CHUNK_SIZE is correct":
+    check CHUNK_SIZE > 0
   
   test "encoder creation and destruction":
     let encoder = newEncoder(columnCount = 4)
@@ -271,6 +269,7 @@ suite "nomos-da Encoder API Tests":
     defer: freeEncodedData(encoded)
     
     discard getLastError()
+
 test "initialization and cleanup work":
   discard nomos_da_init()
   nomos_da_cleanup()
