@@ -11,4 +11,6 @@ type
 
   EncoderHandle* = distinct pointer
   EncodedDataHandle* = distinct pointer
+  VerifierHandle* = distinct pointer
+  ShareHandle* = distinct pointer
   CSizeT* = csize_t

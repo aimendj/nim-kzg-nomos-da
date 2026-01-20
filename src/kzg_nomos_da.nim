@@ -12,6 +12,8 @@
 
 import kzg_nomos_da/types
 
+const CHUNK_SIZE* = 31
+
 proc nomos_da_init*(): cint {.importc: "nomos_da_init".}
 proc nomos_da_cleanup*() {.importc: "nomos_da_cleanup".}
 proc nomos_da_free_string*(s: cstring) {.importc: "nomos_da_free_string".}
@@ -36,9 +38,6 @@ proc checkResult*(
       (if errMsg.len > 0: " (" & errMsg & ")" else: "")
     raise newException(ValueError, msg)
 
-proc nomos_da_max_chunk_size(): CSizeT {.importc: "nomos_da_max_chunk_size".}
-func maxChunkSize*(): int = int(nomos_da_max_chunk_size())
-
 proc nomos_da_encoder_new(
   column_count: CSizeT
 ): pointer {.importc: "nomos_da_encoder_new".}
@@ -60,6 +59,21 @@ proc nomos_da_encoded_data_get_share_count(
   handle: pointer
 ): CSizeT {.importc: "nomos_da_encoded_data_get_share_count".}
 
+proc nomos_da_encoded_data_get_share(
+  handle: pointer, index: CSizeT, out_share_handle: ptr pointer
+): NomosDaResult {.importc: "nomos_da_encoded_data_get_share".}
+
+proc nomos_da_verifier_new(): pointer {.importc: "nomos_da_verifier_new".}
+proc nomos_da_verifier_free(handle: pointer) {.importc: "nomos_da_verifier_free".}
+proc nomos_da_verifier_verify(
+  verifier: pointer, share_handle: pointer, rows_domain_size: CSizeT
+): bool {.importc: "nomos_da_verifier_verify".}
+
+proc nomos_da_share_free(handle: pointer) {.importc: "nomos_da_share_free".}
+proc nomos_da_share_get_index(share_handle: pointer): uint16 {.
+  importc: "nomos_da_share_get_index"
+.}
+
 proc newEncoder*(columnCount: int): EncoderHandle {.raises: [ValueError].} =
   if columnCount <= 0:
     raise newException(ValueError, "columnCount must be greater than 0")
@@ -79,11 +93,10 @@ proc encode*(
     raise newException(ValueError, "Encoder handle is null")
   if data.len == 0:
     raise newException(ValueError, "Data length must be greater than 0")
-  let chunkSize = maxChunkSize()
-  if data.len mod chunkSize != 0:
+  if data.len mod CHUNK_SIZE != 0:
     raise newException(
       ValueError,
-      "Data length (" & $data.len & ") must be a multiple of chunk size (" & $chunkSize &
+      "Data length (" & $data.len & ") must be a multiple of chunk size (" & $CHUNK_SIZE &
         ")",
     )
   var outHandle: pointer = nil
@@ -124,6 +137,52 @@ func getShareCount*(encoded: EncodedDataHandle): int =
   if encoded.pointer == nil: 0
   else: int(nomos_da_encoded_data_get_share_count(encoded.pointer))
 
+proc getShare*(encoded: EncodedDataHandle, index: int): ShareHandle {.
+  raises: [ValueError]
+.} =
+  if encoded.pointer == nil:
+    raise newException(ValueError, "Encoded data handle is null")
+  if index < 0:
+    raise newException(ValueError, "Share index must be non-negative")
+  var outShareHandle: pointer = nil
+  let shareResult = nomos_da_encoded_data_get_share(
+    encoded.pointer, csize_t(index), addr outShareHandle
+  )
+  if shareResult != Success:
+    raise newException(ValueError, "Failed to get share: " & getLastError())
+  if outShareHandle == nil:
+    raise newException(ValueError, "Share handle is null")
+  ShareHandle(outShareHandle)
+
+proc freeShare*(share: ShareHandle) =
+  if share.pointer != nil:
+    nomos_da_share_free(share.pointer)
+
+func getShareIndex*(share: ShareHandle): int =
+  if share.pointer == nil: 0
+  else: int(nomos_da_share_get_index(share.pointer))
+
+proc newVerifier*(): VerifierHandle {.raises: [ValueError].} =
+  let handle = nomos_da_verifier_new()
+  if handle == nil:
+    raise newException(ValueError, "Failed to create verifier: " & getLastError())
+  VerifierHandle(handle)
+
+proc freeVerifier*(verifier: VerifierHandle) =
+  if verifier.pointer != nil:
+    nomos_da_verifier_free(verifier.pointer)
+
+proc verify*(
+    verifier: VerifierHandle, share: ShareHandle, rowsDomainSize: int
+): bool {.raises: [ValueError].} =
+  if verifier.pointer == nil:
+    raise newException(ValueError, "Verifier handle is null")
+  if share.pointer == nil:
+    raise newException(ValueError, "Share handle is null")
+  if rowsDomainSize <= 0:
+    raise newException(ValueError, "Rows domain size must be greater than 0")
+  nomos_da_verifier_verify(verifier.pointer, share.pointer, csize_t(rowsDomainSize))
+
 when isMainModule:
   echo "nomos-da Nim wrapper"
   let initResult = nomos_da_init()
@@ -134,13 +193,12 @@ when isMainModule:
       echo "Error: ", errMsg
     quit(1)
   echo "Initialized successfully"
-  echo "Max chunk size: ", maxChunkSize(), " bytes"
+  echo "Chunk size: ", CHUNK_SIZE, " bytes"
   try:
     let encoder = newEncoder(columnCount = 4)
     defer:
       freeEncoder(encoder)
-    let chunkSize = maxChunkSize()
-    var testData = newSeq[byte](chunkSize * 2)
+    var testData = newSeq[byte](CHUNK_SIZE * 2)
     for i in 0 ..< testData.len:
       testData[i] = byte((i mod 256))
     echo "Encoding ", testData.len, " bytes of data..."
