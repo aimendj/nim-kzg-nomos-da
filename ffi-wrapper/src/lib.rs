@@ -220,7 +220,7 @@ pub unsafe extern "C" fn nomos_da_verifier_free(handle: *mut VerifierHandle) {
 }
 
 #[no_mangle]
-pub extern "C" fn nomos_da_max_chunk_size() -> CSizeT {
+pub extern "C" fn nomos_da_chunk_size() -> CSizeT {
     DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE
 }
 
