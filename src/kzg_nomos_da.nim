@@ -73,6 +73,12 @@ proc nomos_da_share_free(handle: pointer) {.importc: "nomos_da_share_free".}
 proc nomos_da_share_get_index(share_handle: pointer): uint16 {.
   importc: "nomos_da_share_get_index"
 .}
+proc nomos_da_share_get_commitments(
+  share_handle: pointer, out_commitments_handle: ptr pointer
+): NomosDaResult {.importc: "nomos_da_share_get_commitments".}
+proc nomos_da_commitments_free(handle: pointer) {.
+  importc: "nomos_da_commitments_free"
+.}
 
 proc newEncoder*(columnCount: int): EncoderHandle {.raises: [ValueError].} =
   if columnCount <= 0:
@@ -161,6 +167,25 @@ proc freeShare*(share: ShareHandle) =
 func getShareIndex*(share: ShareHandle): int =
   if share.pointer == nil: 0
   else: int(nomos_da_share_get_index(share.pointer))
+
+proc getCommitments*(share: ShareHandle): CommitmentsHandle {.
+  raises: [ValueError]
+.} =
+  if share.pointer == nil:
+    raise newException(ValueError, "Share handle is null")
+  var outCommitmentsHandle: pointer = nil
+  let commitmentsResult = nomos_da_share_get_commitments(
+    share.pointer, addr outCommitmentsHandle
+  )
+  if commitmentsResult != Success:
+    raise newException(ValueError, "Failed to get commitments: " & getLastError())
+  if outCommitmentsHandle == nil:
+    raise newException(ValueError, "Commitments handle is null")
+  CommitmentsHandle(outCommitmentsHandle)
+
+proc freeCommitments*(commitments: CommitmentsHandle) =
+  if commitments.pointer != nil:
+    nomos_da_commitments_free(commitments.pointer)
 
 proc newVerifier*(): VerifierHandle {.raises: [ValueError].} =
   let handle = nomos_da_verifier_new()
