@@ -53,3 +53,4 @@ test-rust:
 test-nim:
 	@echo "Running Nim tests..."
 	nim c --path:src -r tests/test_encoder.nim
+	nim c --path:src -r tests/test_verifier.nim
