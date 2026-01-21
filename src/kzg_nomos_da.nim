@@ -33,7 +33,8 @@ proc checkResult*(
 ): void {.raises: [ValueError].} =
   if result != Success:
     let errMsg = getLastError()
-    let msg = (if operation.len > 0: operation & " failed: " else: "") &
+    let msg =
+      (if operation.len > 0: operation & " failed: " else: "") &
       "nomos-da operation failed with code: " & $result &
       (if errMsg.len > 0: " (" & errMsg & ")" else: "")
     raise newException(ValueError, msg)
@@ -70,15 +71,22 @@ proc nomos_da_verifier_verify(
 ): bool {.importc: "nomos_da_verifier_verify".}
 
 proc nomos_da_share_free(handle: pointer) {.importc: "nomos_da_share_free".}
-proc nomos_da_share_get_index(share_handle: pointer): uint16 {.
-  importc: "nomos_da_share_get_index"
-.}
+proc nomos_da_share_get_index(
+  share_handle: pointer
+): uint16 {.importc: "nomos_da_share_get_index".}
+
 proc nomos_da_share_get_commitments(
   share_handle: pointer, out_commitments_handle: ptr pointer
 ): NomosDaResult {.importc: "nomos_da_share_get_commitments".}
-proc nomos_da_commitments_free(handle: pointer) {.
-  importc: "nomos_da_commitments_free"
-.}
+
+proc nomos_da_commitments_free(handle: pointer) {.importc: "nomos_da_commitments_free".}
+proc nomos_da_reconstruct(
+  shares: ptr pointer, share_count: CSizeT, out_data: ptr ptr uint8, out_len: ptr CSizeT
+): NomosDaResult {.importc: "nomos_da_reconstruct".}
+
+proc nomos_da_reconstruct_free(
+  data: ptr uint8, len: CSizeT
+) {.importc: "nomos_da_reconstruct_free".}
 
 proc newEncoder*(columnCount: int): EncoderHandle {.raises: [ValueError].} =
   if columnCount <= 0:
@@ -140,12 +148,14 @@ proc getData*(encoded: EncodedDataHandle): seq[byte] {.raises: [ValueError].} =
   output
 
 func getShareCount*(encoded: EncodedDataHandle): int =
-  if encoded.pointer == nil: 0
-  else: int(nomos_da_encoded_data_get_share_count(encoded.pointer))
+  if encoded.pointer == nil:
+    0
+  else:
+    int(nomos_da_encoded_data_get_share_count(encoded.pointer))
 
-proc getShare*(encoded: EncodedDataHandle, index: int): ShareHandle {.
-  raises: [ValueError]
-.} =
+proc getShare*(
+    encoded: EncodedDataHandle, index: int
+): ShareHandle {.raises: [ValueError].} =
   if encoded.pointer == nil:
     raise newException(ValueError, "Encoded data handle is null")
   if index < 0:
@@ -165,18 +175,17 @@ proc freeShare*(share: ShareHandle) =
     nomos_da_share_free(share.pointer)
 
 func getShareIndex*(share: ShareHandle): int =
-  if share.pointer == nil: 0
-  else: int(nomos_da_share_get_index(share.pointer))
+  if share.pointer == nil:
+    0
+  else:
+    int(nomos_da_share_get_index(share.pointer))
 
-proc getCommitments*(share: ShareHandle): CommitmentsHandle {.
-  raises: [ValueError]
-.} =
+proc getCommitments*(share: ShareHandle): CommitmentsHandle {.raises: [ValueError].} =
   if share.pointer == nil:
     raise newException(ValueError, "Share handle is null")
   var outCommitmentsHandle: pointer = nil
-  let commitmentsResult = nomos_da_share_get_commitments(
-    share.pointer, addr outCommitmentsHandle
-  )
+  let commitmentsResult =
+    nomos_da_share_get_commitments(share.pointer, addr outCommitmentsHandle)
   if commitmentsResult != Success:
     raise newException(ValueError, "Failed to get commitments: " & getLastError())
   if outCommitmentsHandle == nil:
@@ -207,6 +216,31 @@ proc verify*(
   if rowsDomainSize <= 0:
     raise newException(ValueError, "Rows domain size must be greater than 0")
   nomos_da_verifier_verify(verifier.pointer, share.pointer, csize_t(rowsDomainSize))
+
+proc reconstruct*(shares: openArray[ShareHandle]): seq[byte] {.raises: [ValueError].} =
+  if shares.len == 0:
+    raise newException(ValueError, "Share count must be greater than 0")
+  for i, share in shares:
+    if share.pointer == nil:
+      raise newException(ValueError, "Share handle at index " & $i & " is null")
+  var sharePtrs = newSeq[pointer](shares.len)
+  for i, share in shares:
+    sharePtrs[i] = share.pointer
+  var outData: ptr uint8 = nil
+  var outLen: CSizeT = 0
+  let reconstructResult = nomos_da_reconstruct(
+    addr sharePtrs[0], csize_t(shares.len), addr outData, addr outLen
+  )
+  if reconstructResult != Success:
+    raise newException(ValueError, "Reconstruction failed: " & getLastError())
+  if outData == nil:
+    raise newException(ValueError, "Reconstruction succeeded but output data is null")
+  if outLen == 0:
+    nomos_da_reconstruct_free(outData, outLen)
+    raise newException(ValueError, "Reconstructed data length is 0")
+  result = newSeq[byte](int(outLen))
+  copyMem(addr result[0], outData, int(outLen))
+  nomos_da_reconstruct_free(outData, outLen)
 
 when isMainModule:
   echo "nomos-da Nim wrapper"
