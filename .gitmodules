@@ -1,3 +1,6 @@
 [submodule "logos-blockchain"]
 	path = logos-blockchain
 	url = https://github.com/logos-blockchain/logos-blockchain.git
+[submodule "nim-bincode"]
+	path = nim-bincode
+	url = https://github.com/aimendj/nim-bincode.git

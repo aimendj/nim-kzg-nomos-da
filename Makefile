@@ -2,7 +2,7 @@
 
 help:
 	@echo "Available targets:"
-	@echo "  setup            - Add, initialize, or update logos-blockchain submodule"
+	@echo "  setup            - Initialize and update git submodules"
 	@echo "  build-rust       - Build the Rust nomos-da library"
 	@echo "  build            - Build the Nim wrapper"
 	@echo "  clean            - Clean build artifacts"
@@ -10,15 +10,19 @@ help:
 	@echo "  test             - Run Nim tests"
 
 setup:
-	@if [ -d "logos-blockchain" ]; then \
-		echo "Submodule logos-blockchain exists. Updating..."; \
-		git submodule update --remote logos-blockchain; \
-	elif [ -f ".gitmodules" ]; then \
-		echo "Initializing git submodule..."; \
+	@if [ -f ".gitmodules" ]; then \
+		echo "Initializing git submodules..."; \
 		git submodule update --init --recursive; \
-	else \
+		echo "Updating git submodules..."; \
+		git submodule update --remote --recursive; \
+	fi
+	@if [ ! -d "logos-blockchain" ]; then \
 		echo "Adding logos-blockchain as git submodule..."; \
 		git submodule add https://github.com/logos-blockchain/logos-blockchain.git logos-blockchain; \
+	fi
+	@if [ ! -d "nim-bincode" ]; then \
+		echo "Adding nim-bincode as git submodule..."; \
+		git submodule add https://github.com/aimendj/nim-bincode.git nim-bincode; \
 	fi
 
 build-rust:
@@ -32,6 +36,10 @@ build-rust:
 		exit 1; \
 	fi
 	cd ffi-wrapper && cargo build --release
+	@if [ -d "nim-bincode" ]; then \
+		echo "Building nim-bincode Rust library..."; \
+		cd nim-bincode && make build || cargo build --release; \
+	fi
 
 build-nim:
 	@echo "Building Nim wrapper..."
@@ -41,6 +49,10 @@ clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf nimcache
 	rm -rf ffi-wrapper/target
+	@if [ -d "nim-bincode" ]; then \
+		cd nim-bincode && make clean 2>/dev/null || true; \
+		rm -rf nim-bincode/target; \
+	fi
 
 test-rust:
 	@echo "Running Rust tests..."
