@@ -55,3 +55,4 @@ test-nim:
 	nim c --path:src -r tests/test_encoder.nim
 	nim c --path:src -r tests/test_verifier.nim
 	nim c --path:src -r tests/test_share.nim
+	nim c --path:src -r tests/test_reconstruction.nim
