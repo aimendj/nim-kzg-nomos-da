@@ -5,16 +5,15 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::sync::Mutex;
 
-use kzgrs::KzgRsError;
-use kzgrs_backend::{
+use logos_blockchain_kzgrs::KzgRsError;
+use logos_blockchain_kzgrs_backend::{
     common::share::{DaShare, DaSharesCommitments},
     encoder::{DaEncoder, DaEncoderParams, EncodedData},
     kzg_keys::VERIFICATION_KEY,
     reconstruction::reconstruct_without_missing_data,
     verifier::DaVerifier,
 };
-use nomos_core::{
-    codec::{DeserializeOp as _, SerializeOp as _},
+use logos_blockchain_core::{
     da::{blob::Share as _, DaEncoder as _},
 };
 
@@ -342,152 +341,6 @@ pub unsafe extern "C" fn nomos_da_verifier_verify(
     }
     
     is_valid
-}
-
-// TODO: Replace with nim-bincode native implementation when ready
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_share_serialize(
-    share_handle: *mut ShareHandle,
-    out_buffer: *mut *mut u8,
-    out_len: *mut CSizeT,
-) -> NomosDaResult {
-    if share_handle.is_null() || out_buffer.is_null() || out_len.is_null() {
-        if share_handle.is_null() {
-            set_error("Share handle is null".to_string());
-        } else if out_buffer.is_null() {
-            set_error("Output buffer pointer is null".to_string());
-        } else {
-            set_error("Output length pointer is null".to_string());
-        }
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    match (*share_handle).share.to_bytes() {
-        Ok(bytes) => {
-            let len = bytes.len();
-            let vec: Vec<u8> = bytes.into();
-            let boxed = vec.into_boxed_slice();
-            let ptr = Box::into_raw(boxed) as *mut u8;
-            *out_buffer = ptr;
-            *out_len = len;
-            NomosDaResult::Success
-        }
-        Err(e) => {
-            set_error(format!("Share serialization error: {:?}", e));
-            NomosDaResult::ErrorInternal
-        }
-    }
-}
-
-// TODO: Replace with nim-bincode native implementation when ready
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_share_deserialize(
-    data: *const u8,
-    data_len: CSizeT,
-    out_share_handle: *mut *mut ShareHandle,
-) -> NomosDaResult {
-    if data.is_null() || out_share_handle.is_null() {
-        if data.is_null() {
-            set_error(format!("Data pointer is null (data_len: {})", data_len));
-        } else {
-            set_error(format!("Output share handle pointer is null (data_len: {})", data_len));
-        }
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    if data_len == 0 {
-        set_error(format!("Data length must be greater than 0, got {}", data_len));
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    let data_slice = std::slice::from_raw_parts(data, data_len);
-    match DaShare::from_bytes(data_slice) {
-        Ok(share) => {
-            *out_share_handle = Box::into_raw(Box::new(ShareHandle { share }));
-            NomosDaResult::Success
-        }
-        Err(e) => {
-            set_error(format!("Share deserialization error: {:?} (data_len: {})", e, data_len));
-            NomosDaResult::ErrorInvalidInput
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_share_free_serialized(buffer: *mut u8, len: CSizeT) {
-    if !buffer.is_null() && len > 0 {
-        let slice_ptr: *mut [u8] = ptr::slice_from_raw_parts_mut(buffer, len);
-        let _ = Box::from_raw(slice_ptr);
-    }
-}
-
-// TODO: Replace with nim-bincode native implementation when ready
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_commitments_serialize(
-    commitments_handle: *mut CommitmentsHandle,
-    out_buffer: *mut *mut u8,
-    out_len: *mut CSizeT,
-) -> NomosDaResult {
-    if commitments_handle.is_null() || out_buffer.is_null() || out_len.is_null() {
-        if commitments_handle.is_null() {
-            set_error("Commitments handle is null".to_string());
-        } else if out_buffer.is_null() {
-            set_error("Output buffer pointer is null".to_string());
-        } else {
-            set_error("Output length pointer is null".to_string());
-        }
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    match (*commitments_handle).commitments.to_bytes() {
-        Ok(bytes) => {
-            let len = bytes.len();
-            let vec: Vec<u8> = bytes.into();
-            let boxed = vec.into_boxed_slice();
-            let ptr = Box::into_raw(boxed) as *mut u8;
-            *out_buffer = ptr;
-            *out_len = len;
-            NomosDaResult::Success
-        }
-        Err(e) => {
-            set_error(format!("Commitments serialization error: {:?}", e));
-            NomosDaResult::ErrorInternal
-        }
-    }
-}
-
-// TODO: Replace with nim-bincode native implementation when ready
-#[no_mangle]
-pub unsafe extern "C" fn nomos_da_commitments_deserialize(
-    data: *const u8,
-    data_len: CSizeT,
-    out_commitments_handle: *mut *mut CommitmentsHandle,
-) -> NomosDaResult {
-    if data.is_null() || out_commitments_handle.is_null() {
-        if data.is_null() {
-            set_error(format!("Data pointer is null (data_len: {})", data_len));
-        } else {
-            set_error(format!("Output commitments handle pointer is null (data_len: {})", data_len));
-        }
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    if data_len == 0 {
-        set_error(format!("Data length must be greater than 0, got {}", data_len));
-        return NomosDaResult::ErrorInvalidInput;
-    }
-
-    let data_slice = std::slice::from_raw_parts(data, data_len);
-    match DaSharesCommitments::from_bytes(data_slice) {
-        Ok(commitments) => {
-            *out_commitments_handle = Box::into_raw(Box::new(CommitmentsHandle { commitments }));
-            NomosDaResult::Success
-        }
-        Err(e) => {
-            set_error(format!("Commitments deserialization error: {:?} (data_len: {})", e, data_len));
-            NomosDaResult::ErrorInvalidInput
-        }
-    }
 }
 
 #[no_mangle]

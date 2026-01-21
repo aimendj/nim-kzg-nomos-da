@@ -1,3 +1,6 @@
+# Latest working commits:
+# logos-blockchain: e905a41c47bb04d20befcbc1c095d1710451157c (chore: update taplo (#2037))
+# nim-bincode: 905fedbf5cb57df71b042b6bfe9e7a8bb1542c34 (Use git submodules for dependencies)
 [submodule "logos-blockchain"]
 	path = logos-blockchain
 	url = https://github.com/logos-blockchain/logos-blockchain.git

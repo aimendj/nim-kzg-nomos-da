@@ -9,9 +9,9 @@ crate-type = ["staticlib", "rlib"]
 path = "src/lib.rs" 
 
 [dependencies]
-kzgrs-backend = { path = "../logos-blockchain/nomos-da/kzgrs-backend", default-features = false }
-kzgrs = { path = "../logos-blockchain/nomos-da/kzgrs", default-features = false }
-nomos-core = { path = "../logos-blockchain/nomos-core/chain-defs", default-features = false }
+logos-blockchain-kzgrs-backend = { path = "../logos-blockchain/da/kzgrs-backend", default-features = false }
+logos-blockchain-kzgrs = { path = "../logos-blockchain/da/kzgrs", default-features = false }
+logos-blockchain-core = { path = "../logos-blockchain/core", default-features = false }
 
 [build-dependencies]
 cbindgen = "0.26"
