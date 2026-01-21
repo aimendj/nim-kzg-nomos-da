@@ -2,7 +2,7 @@
 
 help:
 	@echo "Available targets:"
-	@echo "  setup            - Initialize and update git submodules"
+	@echo "  setup            - Initialize and update git submodules, build nim-bincode"
 	@echo "  build-rust       - Build the Rust nomos-da library"
 	@echo "  build            - Build the Nim wrapper"
 	@echo "  clean            - Clean build artifacts"
@@ -23,6 +23,15 @@ setup:
 	@if [ ! -d "nim-bincode" ]; then \
 		echo "Adding nim-bincode as git submodule..."; \
 		git submodule add https://github.com/aimendj/nim-bincode.git nim-bincode; \
+	fi
+	@if [ -d "nim-bincode" ]; then \
+		echo "Setting up nim-bincode..."; \
+		cd nim-bincode && \
+		make install-deps && \
+		make build || \
+		(echo "Warning: nim-bincode build failed, trying cargo directly..."; \
+		 cargo build --release || \
+		 (echo "Error: nim-bincode build failed. Please check manually."; exit 1)); \
 	fi
 
 build-rust:
@@ -68,3 +77,4 @@ test-nim:
 	nim c --path:src -r tests/test_verifier.nim
 	nim c --path:src -r tests/test_share.nim
 	nim c --path:src -r tests/test_reconstruction.nim
+	nim c --path:src -r tests/test_serialization.nim

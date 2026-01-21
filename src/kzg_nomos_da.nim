@@ -242,6 +242,102 @@ proc reconstruct*(shares: openArray[ShareHandle]): seq[byte] {.raises: [ValueErr
   copyMem(addr result[0], outData, int(outLen))
   nomos_da_reconstruct_free(outData, outLen)
 
+# ============================================================================
+# Serialization Support (using nim-bincode)
+# ============================================================================
+
+import nim_bincode as bc
+import stew/endians2
+
+# Re-export BincodeError for convenience
+type BincodeError* = bc.BincodeError
+
+type
+  SerializableShare* = object
+    ## Serializable representation of a share
+    index*: uint16
+    # Note: Share data itself is opaque and cannot be serialized directly
+    # To serialize share data, you would need additional FFI functions
+
+  SerializableEncodedData* = object
+    ## Serializable representation of encoded data metadata
+    data*: seq[byte]
+    shareCount*: uint32
+
+proc serializeUint16*(value: uint16): seq[byte] {.raises: [BincodeError].} =
+  ## Serialize a uint16 using bincode
+  bc.serialize(@(toBytesLE(value)))
+
+proc deserializeUint16*(data: openArray[byte]): uint16 {.raises: [BincodeError].} =
+  ## Deserialize a uint16 using bincode
+  let bytes = bc.deserialize(data)
+  if bytes.len < 2:
+    raise newException(BincodeError, "Cannot deserialize uint16: insufficient data")
+  fromBytesLE(uint16, bytes)
+
+proc shareToBytes*(share: ShareHandle): seq[byte] {.raises: [ValueError, BincodeError].} =
+  ## Serialize share metadata to bytes
+  if share.pointer == nil:
+    raise newException(ValueError, "Share handle is null")
+  let index = uint16(getShareIndex(share))
+  serializeUint16(index)
+
+proc bytesToShare*(data: seq[byte]): SerializableShare {.raises: [BincodeError].} =
+  ## Deserialize share metadata from bytes
+  let index = deserializeUint16(data)
+  SerializableShare(index: index)
+
+proc encodedDataToBytes*(encoded: EncodedDataHandle): seq[byte] {.raises: [ValueError, BincodeError].} =
+  ## Serialize encoded data to bytes
+  if encoded.pointer == nil:
+    raise newException(ValueError, "Encoded data handle is null")
+  let data = getData(encoded)
+  let shareCount = uint32(getShareCount(encoded))
+  # Create a structure with raw bytes for length/count, then serialize the whole thing
+  # Use raw bytes for length prefixes (not bincode-wrapped)
+  let dataLenBytes = @(toBytesLE(uint32(data.len)))
+  let shareCountBytes = @(toBytesLE(shareCount))
+  # Combine: length (4 bytes) + data + shareCount (4 bytes)
+  let combined = dataLenBytes & data & shareCountBytes
+  # Serialize the combined structure with bincode
+  bc.serialize(combined)
+
+proc bytesToEncodedData*(data: seq[byte]): SerializableEncodedData {.raises: [BincodeError].} =
+  ## Deserialize encoded data from bytes
+  let bytes = bc.deserialize(data)
+  var offset = 0
+  # Read data length (raw 4 bytes, little-endian)
+  if bytes.len < offset + 4:
+    raise newException(BincodeError, "Insufficient data for data length")
+  let dataLen = int(fromBytesLE(uint32, bytes[offset..<offset+4]))
+  offset += 4
+  # Read data
+  if bytes.len < offset + dataLen:
+    raise newException(BincodeError, "Insufficient data for encoded data")
+  let encodedData = bytes[offset..<offset+dataLen]
+  offset += dataLen
+  # Read share count (raw 4 bytes, little-endian)
+  if bytes.len < offset + 4:
+    raise newException(BincodeError, "Insufficient data for share count")
+  let shareCount = fromBytesLE(uint32, bytes[offset..<offset+4])
+  SerializableEncodedData(data: @encodedData, shareCount: shareCount)
+
+proc serializeData*(data: seq[byte]): seq[byte] {.raises: [BincodeError].} =
+  ## Serialize raw data using bincode
+  bc.serialize(data)
+
+proc deserializeData*(data: seq[byte]): seq[byte] {.raises: [BincodeError].} =
+  ## Deserialize raw data using bincode
+  bc.deserialize(data)
+
+proc serializeString*(s: string): seq[byte] {.raises: [BincodeError].} =
+  ## Serialize a string using bincode
+  bc.serializeString(s)
+
+proc deserializeString*(data: seq[byte]): string {.raises: [BincodeError].} =
+  ## Deserialize a string using bincode
+  bc.deserializeString(data)
+
 when isMainModule:
   echo "nomos-da Nim wrapper"
   let initResult = nomos_da_init()
